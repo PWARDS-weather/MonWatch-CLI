@@ -32,7 +32,7 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
  MonWatch-CLI SERVER AUTOMATION SYSTEM
 </h1>
 
-**Release date:** August 20, 2026
+**Release date:** September 9, 2026
 
 ---
 
