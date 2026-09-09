@@ -2716,10 +2716,21 @@ def _discover_files(sat_source, sat, dt, bands, segments,
     if sat_source == "mtg":
         roi_nswe = None
         if center_lat is not None and center_lon is not None and roi_deg:
-            roi_nswe = [min(90.0, center_lat + roi_deg),
-                        max(-90.0, center_lat - roi_deg),
-                        center_lon - roi_deg,
-                        center_lon + roi_deg]
+            lon0 = ((float(center_lon) + 180.0) % 360.0) - 180.0
+            lat0 = float(center_lat)
+            half = float(roi_deg)
+            if half >= 80.0:
+                roi_nswe = None
+            else:
+                north = min(90.0, lat0 + half)
+                south = max(-90.0, lat0 - half)
+                west = lon0 - half
+                east = lon0 + half
+                if west < -180.0 or east > 180.0 or east <= west:
+                    logging.info("MTG ROI would wrap dateline or exceed [-180,180]; using full product")
+                    roi_nswe = None
+                else:
+                    roi_nswe = [north, south, west, east]
         return discover_mtg_files(MTG_COLLECTION, dt, bands,
                                   temp_dir=temp_dir or "temp_data", roi_nswe=roi_nswe)
     if sat_source in MTSAT_SAT_CONFIG:
@@ -4148,12 +4159,21 @@ def process_storm_batch(storm, crop_km, products, output_dir, output_width,
     use_fulldisk_resolution = False
     if fulldisk:
         lat = 0.0
-        lon = 140.7
+        if sat_source == "mtg":
+            lon = 0.0
+        elif sat_source in ("goes", "goes16", "goes19"):
+            lon = -75.0
+        elif sat_source in ("goes17", "goes18"):
+            lon = -137.0
+        elif sat_source == "gk2a":
+            lon = 128.2
+        else:
+            lon = 140.7
         half_deg = 180.0
         half_lon = half_lat = half_deg
         bounds = (lat, lon, half_deg)
         use_fulldisk_resolution = True
-        logging.info("  Fulldisk mode: 2km resampling across full disk")
+        logging.info(f"  Fulldisk mode: 2km resampling (center lon={lon})")
 
     explicit_bounds = all(storm.get(k) is not None for k in ("lon_min", "lon_max", "lat_min", "lat_max"))
     if use_fulldisk_resolution:
@@ -4749,11 +4769,21 @@ def process_storm(storm, crop_km, product, output_dir, output_width,
 
     if fulldisk:
         lat = 0.0
-        lon = 140.7
+        if sat_source == "mtg":
+            lon = 0.0
+        elif sat_source in ("goes", "goes16", "goes19"):
+            lon = -75.0
+        elif sat_source in ("goes17", "goes18"):
+            lon = -137.0
+        elif sat_source == "gk2a":
+            lon = 128.2
+        else:
+            lon = 140.7
         half_deg = 180.0
         half_lon = half_lat = half_deg
         bounds = (lat, lon, half_deg)
         use_fulldisk_resolution = True
+        logging.info(f"  Fulldisk mode: 2km resampling (center lon={lon})")
     else:
         use_fulldisk_resolution = False
         logging.info(f"Processing {storm_id} at ({lat:.1f}, {lon:.1f})")
