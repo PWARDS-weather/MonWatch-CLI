@@ -6394,6 +6394,21 @@ def _phradar_radar_bytes(radar_type, date_str, time_str):
     return png, ts, bounds, scale
 
 
+def _phradar_radar_overlay(radar_type, date_str, time_str):
+    png_bytes, ts, bounds, scale = _phradar_radar_bytes(radar_type, date_str, time_str)
+    if png_bytes is None:
+        logging.error("No Panahon radar composite available for overlay.")
+        return None
+    rgba = _phradar_colorize_la(png_bytes, scale=scale, radar_type=radar_type)
+    if rgba is None:
+        logging.error("Failed to colorize Panahon radar composite for overlay.")
+        return None
+    if not bounds or len(bounds) != 4:
+        bounds = list(PHRADAR_BOUNDS)
+    logging.info(f"Panahon radar overlay fetched (timestamp: {ts})")
+    return {"rgb": rgba, "bounds": list(bounds), "ts": ts}
+
+
 def process_phradar_viewer(storm, output_dir, output_width, radar_type="DBZ",
                            date_str=None, time_str=None, crop_km=1000,
                            info=False, logo_path=None,
@@ -6867,10 +6882,15 @@ def main():
                        args.goes18, args.goes19, args.mtg, args.mtsat,
                        args.mtsat1, args.mtsat2])
     radar_overlay = None
-    if args.garbinradar and _sat_flag_given:
-        radar_overlay = _garbin_radar_overlay(args.radar_type, args.date, args.time)
-        if radar_overlay is None:
-            logging.warning("Radar overlay requested but no composite available; rendering satellite only.")
+    if _sat_flag_given:
+        if args.garbinradar:
+            radar_overlay = _garbin_radar_overlay(args.radar_type, args.date, args.time)
+            if radar_overlay is None:
+                logging.warning("GarbinWx radar overlay requested but no composite available; rendering satellite only.")
+        elif getattr(args, "phradar", False):
+            radar_overlay = _phradar_radar_overlay(args.radar_type, args.date, args.time)
+            if radar_overlay is None:
+                logging.warning("Panahon radar overlay requested but no composite available; rendering satellite only.")
 
     logging.info("Starting MonWatch-CLI")
     logging.info(f"Crop: {args.crop_km} km, Product: {args.product}, Width: {args.width} px")
