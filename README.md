@@ -117,4 +117,6 @@ python MonWatch-CLI.py --storm 01W --products sandwich,ir,dvorak --export avif,m
 
 ---
 
+> This is a branch of the traditional UI version. While the original UI was developed first, this version was created to accelerate R&D. Some features were temporarily removed during this shift, but they will be restored shortly.
+
 *MonWatch-CLI Server Automation System — PWARDS ECOSYSTEM — © 2025-2026 PWARDS-weather*
