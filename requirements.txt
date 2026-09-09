@@ -17,3 +17,4 @@ requests
 imageio
 imageio-ffmpeg
 av
+pyresample
