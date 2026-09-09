@@ -1,6 +1,6 @@
 # MonWatch-CLI
 
-**Automated Geostationary Satellite Storm Imagery Generator**
+**A.S.T.I.G. — Automated Satellite Tracking & Imagery Generator**
 
 CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Generates storm-centered (or region-centered) satellite imagery from multiple geostationary satellites without a GUI.
 
