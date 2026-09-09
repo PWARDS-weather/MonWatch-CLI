@@ -3267,7 +3267,15 @@ def plot_floater_image(img_data, out_path, metadata, cmap=None, vmin=None, vmax=
 
     lat_dir = "N" if lat >= 0 else "S"
     lon_dir = "E" if lon >= 0 else "W"
-    ax.set_title(f"{sat_name} {product.upper()}  {abs(lat):.2f}{lat_dir} "
+    _radar_ov = metadata.get("radar_overlay")
+    _radar_tag = ""
+    if _radar_ov:
+        _rsrc = _radar_ov.get("source") or "Radar"
+        _rtype = _radar_ov.get("type") or ""
+        _radar_tag = f" + {_rsrc}"
+        if _rtype:
+            _radar_tag += f" {_rtype}"
+    ax.set_title(f"{sat_name} {product.upper()}{_radar_tag}  {abs(lat):.2f}{lat_dir} "
                  f"{abs(lon):.2f}{lon_dir}  {utc_str}",
                  fontsize=11, fontweight="bold", color="white")
 
@@ -3445,6 +3453,43 @@ def add_modern_info(ax, metadata, logo_path=None):
         lines.append("Storm")
     lines.append(f"{time_str}")
     lines.append(f"{sat_name} • {product.upper()}")
+    radar_ov = metadata.get("radar_overlay")
+    if radar_ov:
+        src = radar_ov.get("source") or "Radar"
+        rtype = radar_ov.get("type") or ""
+        rts = radar_ov.get("ts") or ""
+        
+        label = f"Radar: {src}"
+        line = f"Radar: {src}"
+        if rtype:
+            line += f" ({rtype})"
+        lines.append(line)
+
+        if rts:
+            try:
+                radar_dt_utc = datetime.datetime.strptime(rts, "%Y%m%d%H%M").replace(
+                    tzinfo=datetime.timezone.utc
+                )
+                radar_dt_pht = radar_dt_utc + datetime.timedelta(hours=8)
+
+                target_dt = metadata.get('target_dt')
+                same_date = False
+                if target_dt is not None and isinstance(target_dt, datetime.datetime):
+                    if target_dt.tzinfo is None:
+                        target_dt_utc = target_dt.replace(tzinfo=datetime.timezone.utc)
+                    else:
+                        target_dt_utc = target_dt
+                    target_dt_pht = target_dt_utc + datetime.timedelta(hours=8)
+                    same_date = (radar_dt_pht.date() == target_dt_pht.date())
+
+                if same_date:
+                    time_str = radar_dt_pht.strftime("%I:%M %p PHT")
+                else:
+                    time_str = radar_dt_pht.strftime("%Y-%m-%d %I:%M %p PHT")
+
+                lines.append(f"Radar Time: {time_str}")
+            except ValueError:
+                lines.append(f"Radar Time: {rts}")
     if winds is not None:
         lines.append(f"Winds: {winds:.0f} kt")
     if pressure is not None:
@@ -5956,8 +6001,15 @@ def _garbin_radar_overlay(radar_type, date_str, time_str):
         logging.error(f"Failed to decode radar composite: {e}")
         return None
     arr = np.asarray(img).astype(np.float32) / 255.0
+    radar_type = (radar_type or "DBZ").upper()
     logging.info(f"GarbinWx radar overlay fetched (timestamp: {ts})")
-    return {"rgb": arr, "bounds": list(GARBIN_RADAR_BOUNDS), "ts": ts}
+    return {
+        "rgb": arr,
+        "bounds": list(GARBIN_RADAR_BOUNDS),
+        "ts": ts,
+        "source": "GarbinWx",
+        "type": radar_type,
+    }
 
 
 def process_garbin_radar_viewer(storm, output_dir, output_width, radar_type="DBZ",
@@ -6405,8 +6457,15 @@ def _phradar_radar_overlay(radar_type, date_str, time_str):
         return None
     if not bounds or len(bounds) != 4:
         bounds = list(PHRADAR_BOUNDS)
+    radar_type = (radar_type or "DBZ").upper()
     logging.info(f"Panahon radar overlay fetched (timestamp: {ts})")
-    return {"rgb": rgba, "bounds": list(bounds), "ts": ts}
+    return {
+        "rgb": rgba,
+        "bounds": list(bounds),
+        "ts": ts,
+        "source": "PAGASA/Panahon",
+        "type": radar_type,
+    }
 
 
 def process_phradar_viewer(storm, output_dir, output_width, radar_type="DBZ",
