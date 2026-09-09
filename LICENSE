@@ -1,3 +1,34 @@
+Copyright 2025-2026 PWARDS-weather (Pasacao Weather Atmospheric and Real-Time Data System)
+
+This project is dual-licensed under the Apache License, Version 2.0,
+and the GNU General Public License, Version 3.0.
+
+You may use, modify, and distribute this software under the terms of
+either license, provided that:
+  - Any distributed modifications remain open-source.
+  - You comply with both licenses where applicable.
+  - You retain this copyright notice and license headers in all copies
+    or substantial portions of the software.
+
+-------------------------------------------------------------------------------
+DEVELOPER NOTIFICATION POLICY
+
+As a condition of this open-source license, any party intending to modify,
+redistribute, or create derivative works of this software MUST formally notify
+the principal developers prior to such modification or redistribution.
+
+Notification must be sent via:
+  - Email to: pwards.sci@gmail.com
+  - Official GitHub issue or pull request at:
+    https://github.com/PWARDS-weather/MonWatch-UI
+
+Failure to provide notification constitutes unauthorized modification and
+distribution, which violates the terms of this license and may result in
+legal action under applicable copyright law.
+
+This policy applies to all users, contributors, and distributors of this software.
+-------------------------------------------------------------------------------
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -175,19 +206,6 @@
 
    END OF TERMS AND CONDITIONS
 
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [yyyy] [name of copyright owner]
-
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
    You may obtain a copy of the License at
@@ -196,6 +214,51 @@
 
    Unless required by applicable law or agreed to in writing, software
    distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied. See the License for the specific language governing
+   permissions and limitations under the License.
+
+-------------------------------------------------------------------------------
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The GNU General Public License is a free, copyleft license for
+software and other kinds of works.
+
+  When we speak of free software, we are referring to freedom, not
+price. Our General Public Licenses are designed to make sure that you
+have the freedom to share and change all versions of a program--to
+make sure it remains free software for all its users. We, the
+Free Software Foundation, use the GNU General Public License for most
+of our software; it applies also to any other work released this way
+by its authors. You can apply it to your programs, too.
+
+  When we distribute copies of such a program, we give you
+all the legal terms. You can use, modify and/or distribute it.
+
+  To protect your rights, we need to prevent others from denying you
+these rights or asking you to surrender the rights. Therefore, you
+have certain responsibilities if you distribute copies of the software,
+or if you modify it: responsibilities to respect the freedom of others.
+
+  For example, if you distribute copies of such a program, whether
+gratis or for a fee, you must pass on to the recipients the same
+freedoms that you received. You must make sure that they, too,
+receive or can get the source code. And you must show them these terms
+so they know their rights.
+
+  The full text of the GNU GPL v3 is available at:
+  https://www.gnu.org/licenses/gpl-3.0.txt
+
+  By using, modifying, or distributing this software, you agree to
+  comply with the terms of the GNU General Public License, Version 3,
+  in addition to the Apache License, Version 2.0 above.
+
+-------------------------------------------------------------------------------
+END OF LICENSE
