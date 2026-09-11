@@ -33,6 +33,7 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
 </h1>
 
 **Release date:** September 9, 2026
+**Last Updated:** September 11, 2026
 
 ---
 
