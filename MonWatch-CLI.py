@@ -413,6 +413,28 @@ INFRARED_HIM_nodes = [
     (1.0, "#000000"),
 ]
 
+BASIN_ALIASES = {
+    "WP": "WP", "WPAC": "WP", "WESTPAC": "WP", "WESTERNPACIFIC": "WP",
+    "EP": "EP", "EPAC": "EP", "EASTPAC": "EP", "EASTERNPACIFIC": "EP",
+    "CP": "CP", "CPAC": "CP", "CENTRALPACIFIC": "CP",
+    "AL": "AL", "ATL": "AL", "NATL": "AL", "NA": "AL", "NORTHATLANTIC": "AL",
+    "IO": "IO", "NIO": "IO", "NORTHINDIAN": "IO",
+    "SH": "SH", "SHEM": "SH", "SOUTHERNHEMISPHERE": "SH",
+    "SI": "SI", "SIO": "SI", "SOUTHINDIAN": "SI",
+    "AU": "AU", "AUS": "AU",
+    "SP": "SP", "SOUTHPAC": "SP", "SOUTHPACIFIC": "SP",
+}
+
+def _normalize_basin(value):
+    key = (value or "").strip().upper().replace("-", "").replace("_", "").replace(" ", "")
+    return BASIN_ALIASES.get(key, key)
+
+
+def _filter_storms_by_basin(storms, basin_filter):
+    if not basin_filter:
+        return list(storms)
+    return [s for s in storms if _normalize_basin(s.get("basin", "")) in basin_filter]
+
 def _dvorak_ir_lookup(bt_kelvin: np.ndarray) -> np.ndarray:
     celsius = np.asarray(bt_kelvin, dtype=np.float32) - 273.15
     idx = np.clip((celsius + 100) * 255 / 150, 0, 255).astype(np.uint8)
@@ -478,30 +500,64 @@ def _dvorak_cmap():
             colors[i] = [0.20, 0.20, 0.20]
     return mcolors.ListedColormap(colors, name="dvorak")
 
-def get_required_segments(bounds, sat_lon=140.7, buffer=False):
+def get_required_segments(bounds, sat_lon=140.7, buffer=False,
+                          single_segment_max_gap_frac=0.03):
+                              
     lat, lon, crop_deg = bounds
     if crop_deg >= 50.0:
         return [f"S{i:02d}" for i in range(1, 11)]
+
     p_geos = pyproj.Proj(proj='geos', h=35785863.0, lon_0=sat_lon, sweep='x')
-    lats = np.linspace(lat - crop_deg, lat + crop_deg, 10)
-    lons = np.linspace(lon - crop_deg, lon + crop_deg, 10)
+
+    n = 24
+    lats = np.linspace(lat - crop_deg, lat + crop_deg, n)
+    lons = np.linspace(lon - crop_deg, lon + crop_deg, n)
     lon_grid, lat_grid = np.meshgrid(lons, lats)
     _, y = p_geos(lon_grid, lat_grid)
     valid_y = y[y < 1e20]
     if len(valid_y) == 0:
         return [f"S{i:02d}" for i in range(1, 11)]
-    y_max = np.nanmax(valid_y)
-    y_min = np.nanmin(valid_y)
-    y_extent = 5434895.0
-    norm_y_min = (y_extent - y_max) / (2 * y_extent)
-    norm_y_max = (y_extent - y_min) / (2 * y_extent)
+
+    y_max = float(np.nanmax(valid_y))
+    y_min = float(np.nanmin(valid_y))
+
+    y_extent = 5434894.885056
+
+    y_margin = 0.003 * 2 * y_extent
+
+    norm_y_min = (y_extent - (y_max + y_margin)) / (2 * y_extent)
+    norm_y_max = (y_extent - (y_min - y_margin)) / (2 * y_extent)
+
     seg_start = int(np.clip(np.floor(norm_y_min * 10), 0, 9)) + 1
-    seg_end = int(np.clip(np.floor(norm_y_max * 10), 0, 9)) + 1
+    seg_end   = int(np.clip(np.floor(norm_y_max * 10), 0, 9)) + 1
+
+    if seg_end > seg_start:
+        seg_bounds = [y_extent * (1 - 2 * k / 10) for k in range(11)]
+        crop_span_m = max(y_max - y_min, 1.0)
+
+        best_seg = None
+        best_gap_m = None
+        for k in range(seg_start, seg_end + 1):
+            seg_top = seg_bounds[k - 1]   
+            seg_bot = seg_bounds[k]       
+            overlap_m = max(min(y_max, seg_top) - max(y_min, seg_bot), 0.0)
+            if overlap_m <= 0:
+                continue
+            gap_m = crop_span_m - overlap_m
+            if best_gap_m is None or gap_m < best_gap_m:
+                best_gap_m = gap_m
+                best_seg = k
+
+        allowed_gap_m = single_segment_max_gap_frac * crop_span_m
+        if best_seg is not None and best_gap_m <= allowed_gap_m:
+            return [f"S{best_seg:02d}"]
+
     if buffer:
         seg_start = max(1, seg_start - 1)
-        seg_end = min(10, seg_end + 1)
-    return [f"S{i:02d}" for i in range(seg_start, seg_end + 1)]
+        seg_end   = min(10, seg_end + 1)
 
+    return [f"S{i:02d}" for i in range(seg_start, seg_end + 1)]
+    
 def generate_time_slots(date_from, date_to, time_from, time_to):
     slots = []
     if not date_from:
@@ -2805,6 +2861,125 @@ def _resolve_latest_dt(sat_source, sat, segments, bands, use_target=False):
         return None
     return get_latest_available_dt(sat, segments, bands, use_target=use_target)
 
+def _eumetsat_creds_available():
+    try:
+        import eumdac  # noqa: F401
+    except ImportError:
+        return False
+    if os.environ.get("EUMETSAT_CONSUMER_KEY") and os.environ.get("EUMETSAT_CONSUMER_SECRET"):
+        return True
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    creds = os.path.join(base_dir, "creds.txt")
+    if os.path.exists(creds):
+        try:
+            txt = open(creds, encoding="utf-8", errors="replace").read()
+            if "EUMETSAT_CONSUMER_KEY" in txt and "EUMETSAT_CONSUMER_SECRET" in txt:
+                return True
+        except Exception:
+            pass
+    if os.path.exists(os.path.join(base_dir, "!!VPSIFT.py")):
+        return True
+    return False
+
+def _auto_satellite_candidates(lat, lon):
+    lon_n = ((float(lon) + 180.0) % 360.0) - 180.0
+    lat_r = np.radians(float(lat))
+
+    def _view_angle(sub_lon):
+        c = np.cos(lat_r) * np.cos(np.radians(lon_n - sub_lon))
+        c = max(-1.0, min(1.0, float(c)))
+        return float(np.degrees(np.arccos(c)))
+
+    entries = [
+        ("him",    140.7, "Himawari-9/8", 0.0),
+        ("gk2a",   128.2, "GK-2A",        0.0),
+        ("goes19", -75.2, "GOES-19",      0.0),
+        ("goes18", -137.0, "GOES-18",     0.0),
+        ("goes16", -75.2, "GOES-16",      0.5),
+        ("goes17", -137.0, "GOES-17",     0.5),
+    ]
+    if _eumetsat_creds_available():
+        entries.append(("mtg", 0.0, "MTG-I1", 0.3))
+
+    ranked = []
+    for src, sub_lon, name, penalty in entries:
+        a = _view_angle(sub_lon)
+        if a >= 81.0:
+            continue
+        ranked.append((a + penalty, src, name))
+    ranked.sort(key=lambda t: t[0])
+    return [(src, name) for _, src, name in ranked]
+
+
+def _auto_probe_satellite(sat_source, date_str, time_str, bands, use_target=False):
+    if time_str:
+        d = date_str or datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+        try:
+            fixed_dt = datetime.datetime.strptime(f"{d}{time_str}", "%Y%m%d%H%M")
+        except ValueError:
+            return None, None
+    else:
+        fixed_dt = None
+
+    if sat_source == "him":
+        segs = [f"S{i:02d}" for i in range(1, 11)]
+        for bucket in ("noaa-himawari9", "noaa-himawari8"):
+            try:
+                probe_dt = fixed_dt or get_latest_available_dt(
+                    bucket, segs, bands, use_target=use_target)
+                if probe_dt is None:
+                    continue
+                if discover_ahi_files(bucket, probe_dt, bands, segs,
+                                      use_target=use_target):
+                    return probe_dt, bucket
+            except Exception as e:
+                logging.debug(f"  auto-probe {bucket}: {e}")
+        return None, None
+
+    if sat_source == "gk2a":
+        try:
+            probe_dt = fixed_dt or get_latest_available_dt_gk2a(bands)
+            if probe_dt is None:
+                return None, None
+            if discover_gk2a_files(probe_dt, bands):
+                return probe_dt, GK2A_BUCKET
+        except Exception as e:
+            logging.debug(f"  auto-probe gk2a: {e}")
+        return None, None
+
+    if sat_source in ("goes16", "goes17", "goes18", "goes19"):
+        try:
+            probe_dt = fixed_dt or get_latest_available_dt_goes(sat_source)
+            if probe_dt is None:
+                return None, None
+            abi_bands = [AHI_TO_ABI[b] for b in bands]
+            if discover_goes_files(sat_source, probe_dt, abi_bands):
+                return probe_dt, GOES_SATELLITE_MAP[sat_source]
+        except Exception as e:
+            logging.debug(f"  auto-probe {sat_source}: {e}")
+        return None, None
+
+    if sat_source == "mtg":
+        try:
+            eumdac = _ensure_mtg_setup()
+            key, secret = _load_eumetsat_creds()
+            token = eumdac.AccessToken((key, secret))
+            store = eumdac.DataStore(token)
+            coll = store.get_collection(MTG_COLLECTION)
+            probe_dt = fixed_dt
+            if probe_dt is None:
+                now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+                probe_dt = now.replace(minute=(now.minute // 10) * 10,
+                                       second=0, microsecond=0) - datetime.timedelta(minutes=20)
+            # A 10-minute window catches the nominal FCI cadence.
+            hits = coll.search(dtstart=probe_dt - datetime.timedelta(minutes=5),
+                               dtend=probe_dt + datetime.timedelta(minutes=5))
+            if hits.first() is not None:
+                return probe_dt, MTG_COLLECTION
+        except Exception as e:
+            logging.debug(f"  auto-probe mtg: {e}")
+        return None, None
+
 def _global_area(output_width):
     lon_min, lon_max = -180.0, 180.0
     lat_min, lat_max = -80.0, 80.0
@@ -4515,7 +4690,7 @@ def process_storm_batch(storm, crop_km, products, output_dir, output_width,
         segments = ["R3"]
         logging.info(f"  Target area mode: using dynamic R3xx observation sequences (not fixed segments)")
     else:
-        segments = get_required_segments(bounds, buffer=not explicit_bounds)
+        segments = get_required_segments(bounds, buffer=False)
         logging.info(f"  Required segments: {segments}")
 
     bands = []
@@ -5204,7 +5379,7 @@ def process_storm(storm, crop_km, product, output_dir, output_width,
         segments = ["R3"]
         logging.info(f"  Target area mode: using dynamic R3xx observation sequences (not fixed segments)")
     else:
-        segments = get_required_segments(bounds, buffer=not explicit_bounds)
+        segments = get_required_segments(bounds, buffer=False)
         logging.info(f"  Required segments: {segments}")
 
     if product == "sandwich":
@@ -6981,6 +7156,18 @@ def process_phradar_viewer(storm, output_dir, output_width, radar_type="DBZ",
 def main():
     parser = argparse.ArgumentParser(description="MonWatch-CLI — Automated satellite storm imagery")
     parser.add_argument("--storm", help="Specific storm ID or name")
+    parser.add_argument("--auto-satellite", dest="auto_satellite", action="store_true",
+                        help="Auto-pick the best observing geostationary satellite for the "
+                             "target location (e.g. Himawari for the Philippines/WPac, "
+                             "GOES-East for the Atlantic, GK-2A for East Asia, MTG for "
+                             "Africa/Europe when EUMETSAT credentials are present). "
+                             "Candidates are ranked by viewing geometry, then probed in "
+                             "order until one has data at the requested or latest "
+                             "timestamp. Overrides --him/--gk2a/--goes/--mtg and --multi.")
+    parser.add_argument("--filter", dest="basin_filter", default=None,
+                    help="Comma-separated basin filter for current ATCF storms. "
+                         "Examples: WP, EPAC, CPAC, AL/ATL, IO, SH, SI, AU, SP. "
+                         "Omit to process every active storm.")
     parser.add_argument("--crop-km", type=float, default=1000,
                         help="Crop size in km (shortcuts: --1000, --3000)")
     parser.add_argument("--product", default="sandwich",
@@ -7131,6 +7318,15 @@ def main():
                         help="Center longitude for a custom storm location")
     args, unknown = parser.parse_known_args()
 
+
+    basin_filter = None
+    if getattr(args, "basin_filter", None):
+        basin_filter = {
+            _normalize_basin(x)
+            for x in re.split(r"[,\s;]+", args.basin_filter)
+            if x.strip()
+        }
+        
     if args.goes16:
         sat_source = "goes16"
     elif args.goes17:
@@ -7401,8 +7597,8 @@ def main():
         logging.info("Done.")
         return
 
-    storms = fetch_knackwx_atcf()
-    if not storms:
+    all_storms = fetch_knackwx_atcf()
+    if not all_storms:
         if args.year:
             logging.warning("KnackWx ATCF unavailable; relying on --year IBTrACS lookup.")
         elif args.garbinradar or getattr(args, "phradar", False):
@@ -7410,13 +7606,19 @@ def main():
         else:
             logging.error("No ATCF data received.")
             sys.exit(1)
-    logging.info(f"Received {len(storms)} total storms.")
-    wpac_storms = [s for s in storms if s.get("basin", "").upper() in ("WPAC", "WP")]
+
+    logging.info(f"Received {len(all_storms)} total ATCF storms.")
+
+    active_storms = _filter_storms_by_basin(all_storms, basin_filter)
+    if basin_filter:
+        logging.info(f"Basin filter {sorted(basin_filter)} -> {len(active_storms)} active storm(s).")
+    else:
+        logging.info(f"No basin filter -> {len(active_storms)} active storm(s).")
 
     ibtracs_track = None
     if args.storm:
         target = args.storm.upper()
-        storms = [s for s in storms if
+        storms = [s for s in all_storms if
                   s.get("atcf_id", "").upper() == target or
                   s.get("long_atcf_id", "").upper() == target or
                   s.get("storm_name", "").upper() == target]
@@ -7478,8 +7680,11 @@ def main():
             sys.exit(1)
         logging.info(f"Found {len(storms)} storm(s) matching '{target}'.")
     else:
-        storms = [s for s in storms if s.get("basin", "").upper() in ("WPAC", "WP")]
-        logging.info(f"Filtered to {len(storms)} Western Pacific storms.")
+        storms = active_storms
+        if basin_filter:
+            logging.info(f"Filtered to {len(storms)} storm(s) in basins: {sorted(basin_filter)}")
+        else:
+            logging.info(f"Processing all {len(storms)} active storm(s).")
 
     if args.target:
         args.crop_km = 1000
@@ -7679,11 +7884,67 @@ def main():
         }]
         logging.info(f"Fulldisk: single native scene ({storms[0]['atcf_id']}), not per-storm")
 
-    for sat in sat_sources:
-        out_dir = _sat_output(sat)
-        os.makedirs(out_dir, exist_ok=True)
-        logging.info(f"  Satellite: {sat} -> {out_dir}")
-        for storm in storms:
+    auto_sat_mode = (getattr(args, "auto_satellite", False)
+                     and not _sat_flag_given and not args.fulldisk)
+    auto_probe_bands = None
+    if auto_sat_mode:
+        if process_batch:
+            auto_probe_bands = sorted({b for p in valid_batch
+                                       for b in PRODUCT_BANDS.get(p, [13])})
+        else:
+            auto_probe_bands = PRODUCT_BANDS.get(args.product, [13])
+        logging.info("--auto-satellite: per-storm satellite selection enabled.")
+
+    for storm in storms:
+        if auto_sat_mode:
+            s_lat = storm.get("latitude")
+            s_lon = storm.get("longitude")
+            if (s_lat is None or s_lon is None) and all(
+                    storm.get(k) is not None for k in
+                    ("lat_min", "lat_max", "lon_min", "lon_max")):
+                s_lat = (storm["lat_min"] + storm["lat_max"]) / 2.0
+                s_lon = (storm["lon_min"] + storm["lon_max"]) / 2.0
+            if s_lat is None or s_lon is None:
+                logging.warning(f"  [auto-satellite] no target coords for "
+                                f"{storm.get('atcf_id', 'UNKNOWN')}; skipping.")
+                continue
+
+            cands = _auto_satellite_candidates(s_lat, s_lon)
+            if not cands:
+                logging.warning(f"  [auto-satellite] no candidate satellite has "
+                                f"a usable view of {storm.get('atcf_id')} "
+                                f"({s_lat:.2f}, {s_lon:.2f}); skipping.")
+                continue
+            logging.info(f"  [auto-satellite] {storm.get('atcf_id')} "
+                         f"({s_lat:.2f}, {s_lon:.2f}) -> "
+                         + ", ".join(n for _, n in cands))
+
+            picked_src, picked_name = None, None
+            for cand_src, cand_name in cands:
+                logging.info(f"    Probing {cand_name} ({cand_src})...")
+                pdt, _bucket = _auto_probe_satellite(
+                    cand_src, args.date, args.time, auto_probe_bands,
+                    use_target=False)
+                if pdt is not None:
+                    picked_src, picked_name = cand_src, cand_name
+                    logging.info(f"    [OK] {cand_name} has data at "
+                                 f"{pdt.strftime('%Y-%m-%d %H:%M')}Z")
+                    break
+                logging.info(f"    [--] {cand_name} unavailable")
+            if picked_src is None:
+                logging.warning(f"  [auto-satellite] no candidate had data for "
+                                f"{storm.get('atcf_id')}; skipping.")
+                continue
+            logging.info(f"  [auto-satellite] selected {picked_name} "
+                         f"({picked_src}) for {storm.get('atcf_id')}")
+            sats_for_storm = [picked_src]
+        else:
+            sats_for_storm = list(sat_sources)
+
+        for sat in sats_for_storm:
+            out_dir = _sat_output(sat)
+            os.makedirs(out_dir, exist_ok=True)
+            logging.info(f"  Satellite: {sat} -> {out_dir}")
             try:
                 if process_batch:
                     process_storm_batch(storm, args.crop_km, valid_batch, out_dir, args.width,
@@ -7691,7 +7952,7 @@ def main():
                                         args.latest, args.date, args.time,
                                         args.grid, args.thick, _sat_color(sat), args.style, args.no_coastlines, args.label,
                                         args.par, args.tcad, args.tcid,
-                                        ico=args.ico, invest=args.invest, peak=args.peak, active_storms=wpac_storms,
+                                        ico=args.ico, invest=args.invest, peak=args.peak, active_storms=active_storms,
                                         data_dir=args.data_dir, export_formats=export_formats,
                                         date_from=args.datefrom, date_to=args.dateto, time_from=args.timefrom, time_to=args.timeto,
                                         use_target=_sat_use_target(sat), floater=args.floater, fps=args.fps, nopng=args.nopng,
@@ -7703,7 +7964,7 @@ def main():
                                   args.latest, args.date, args.time,
                                   args.grid, args.thick, _sat_color(sat), args.style, args.no_coastlines, args.label,
                                   args.par, args.tcad, args.tcid,
-                                  ico=args.ico, invest=args.invest, peak=args.peak, active_storms=wpac_storms,
+                                  ico=args.ico, invest=args.invest, peak=args.peak, active_storms=active_storms,
                                   data_dir=args.data_dir, export_formats=export_formats,
                                   date_from=args.datefrom, date_to=args.dateto, time_from=args.timefrom, time_to=args.timeto,
                                   use_target=_sat_use_target(sat), floater=args.floater, fps=args.fps, nopng=args.nopng,
