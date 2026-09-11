@@ -32,8 +32,8 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
  MonWatch-CLI SERVER AUTOMATION SYSTEM
 </h1>
 
-**Release date:** September 9, 2026
-**Last Updated:** September 11, 2026
+**Release date:** September 9, 2026<br>
+**Last Updated:** September 11, 2026<br>
 **Version:** 1.2
 
 ---
@@ -46,6 +46,7 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
 - **GOES-16/17/18/19** (auto East/West selection by longitude)
 - **MTG** (EUMETSAT FCI, requires credentials)
 - **MTSAT-1R / MTSAT-2** (historical HRIT from CEReS)
+- **Auto-Satellite Selection** (`--auto-satellite`) — Automatically ranks and probes candidate satellites (Himawari, GK-2A, GOES, MTG) by viewing geometry, then picks the first one with available data for the target or requested timestamp.
 
 ### Products
 `sandwich`, `true`, `dvorak`, `ir` (BT PWARDS), `infrared`, `z1-ir`, `althea-ott2`, `z1-true`, `z1-dvorak`, `b03`, `irv`, `bt0`, `falsecolor`, `falsecoloradv`, `firetemp`, `dayconv`, `fire`
@@ -55,6 +56,8 @@ Batch mode via `--products`.
 ### Storm & Region Targeting
 - Live ATCF via KnackWx API
 - Historical tracks via IBTrACS (`--year` / date-based)
+- **Basin filtering** (`--filter`) — Process only storms in specified basins (e.g. `WP`, `EPAC`, `AL`, `IO`, `SH`); accepts aliases and normalizes input.
+- **All active storms processed by default** — no implicit WPAC-only restriction; use `--filter` to narrow.
 - Named regions: Philippines, WestPac, CONUS, East/West Coast, Gulf, Caribbean, Europe, Mediterranean, Africa, etc.
 - Custom lat/lon, polygon crops (PAR, TCAD, TCID, North/South Luzon, Manila, etc.)
 - Peak-intensity time (`--peak`)
@@ -81,8 +84,14 @@ Batch mode via `--products`.
 ## Quick Usage
 
 ```bash
-# Latest sandwich for active WPAC storms
+# Latest sandwich for all active storms
 python MonWatch-CLI.py --product sandwich --him
+
+# Only Western Pacific storms
+python MonWatch-CLI.py --product sandwich --him --filter WP
+
+# Let MonWatch-CLI pick the best satellite per storm
+python MonWatch-CLI.py --auto-satellite --product sandwich
 
 # Specific storm + historical year
 python MonWatch-CLI.py --storm HAIYAN --year 2013 --product dvorak --him
