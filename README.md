@@ -26,7 +26,7 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
     width="32" 
     height="32" 
     alt="splash" 
-    src="https://github.com/user-attachments/assets/a7821feb-77fc-4c9d-906a-3cb48aa0e555"
+    src="https://github.com/user-attachments/assets/c6a21b61-6238-44b8-8719-26bb166c45bf"
     style="vertical-align: middle; margin-right: 8px;"
   >
  MonWatch-CLI SERVER AUTOMATION SYSTEM
