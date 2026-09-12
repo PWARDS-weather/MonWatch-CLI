@@ -983,7 +983,6 @@ def process_vpsift_ahi_data(local_files_map, target_area, target_dt, composite_t
             scn.load(["B03", "B13"])
             vis = scn["B03"].compute().astype(np.float32)
             ir = scn["B13"].compute().astype(np.float32)
-            # VIS is 500 m (22000), IR is already 2 km (5500). Stay on the IR grid.
             if vis.shape != ir.shape:
                 vis = _resize_like(vis, ir.shape)
             return vis, ir, None, None
@@ -2863,7 +2862,7 @@ def _resolve_latest_dt(sat_source, sat, segments, bands, use_target=False):
 
 def _eumetsat_creds_available():
     try:
-        import eumdac  # noqa: F401
+        import eumdac
     except ImportError:
         return False
     if os.environ.get("EUMETSAT_CONSUMER_KEY") and os.environ.get("EUMETSAT_CONSUMER_SECRET"):
@@ -2971,7 +2970,6 @@ def _auto_probe_satellite(sat_source, date_str, time_str, bands, use_target=Fals
                 now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                 probe_dt = now.replace(minute=(now.minute // 10) * 10,
                                        second=0, microsecond=0) - datetime.timedelta(minutes=20)
-            # A 10-minute window catches the nominal FCI cadence.
             hits = coll.search(dtstart=probe_dt - datetime.timedelta(minutes=5),
                                dtend=probe_dt + datetime.timedelta(minutes=5))
             if hits.first() is not None:
