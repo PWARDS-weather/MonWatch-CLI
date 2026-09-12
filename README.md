@@ -34,24 +34,49 @@ CLI tool for servers and automated systems. Part of the PWARDS ecosystem. Genera
 
 **Release date:** September 9, 2026<br>
 **Last Updated:** September 11, 2026<br>
-**Version:** 1.2
+**Version:** 1.3
+
+---
+
+## What's New in 1.3
+
+- **JPSS / VIIRS polar-orbiting support** — New `--VIIRS-SDR`, `--VIIRS-EDR`, `--JPSS-GRAN`, and `--VIIRSI-EDR` families sourced from NOAA CLASS, with optional `--jpss`, `--jpss-product`, and `--jpss-sat` filters.
+- **NOAA-20 / NOAA-21 / S-NPP platform flags** — `--NOAA-20`, `--NOAA-21`, `--NOAA` (auto), `--NPP` for quick VIIRS platform selection.
+- **Smarter `--auto-satellite`** — Probes every candidate satellite and picks the one with the *newest* available observation timestamp instead of the first responder.
+- **GarbinWx identity resolution** — Now reads the API id from `GARBINWXID`, `GARBINWX_ID`, or `garbinwxid`, and a custom user-agent from `GARBINWXUSER` / `GARBINWX_USER`.
+- **Radar type normalisation** — `RAIN` / `RAINRATE` aliases now correctly map to `RR`.
 
 ---
 
 ## Features
 
 ### Satellites
+
+#### Geostationary
 - **Himawari-8/9** (AHI) — Full Disk + Target (Region 3)
 - **GK-2A** (AMI)
 - **GOES-16/17/18/19** (auto East/West selection by longitude)
 - **MTG** (EUMETSAT FCI, requires credentials)
 - **MTSAT-1R / MTSAT-2** (historical HRIT from CEReS)
-- **Auto-Satellite Selection** (`--auto-satellite`) — Automatically ranks and probes candidate satellites (Himawari, GK-2A, GOES, MTG) by viewing geometry, then picks the first one with available data for the target or requested timestamp.
+
+#### Polar-Orbiting (NEW)
+- **JPSS / VIIRS** via NOAA CLASS:
+  - `--VIIRS-SDR` — VIIRS Sensor Data Records (native radiances)
+  - `--VIIRS-EDR` — VIIRS Environmental Data Records (cloud mask, surface reflectance)
+  - `--JPSS-GRAN` — JPSS granule EDRs (VIIRS + ATMS + OMPS bundles)
+  - `--VIIRSI-EDR` — VIIRS Imagery EDRs
+  - `--jpss <FAMILY>` — explicit CLASS family name
+  - `--jpss-product <NAME>` — pin a specific CLASS product subfolder
+  - `--jpss-sat <ID>` — pin a satellite (`J01` = NOAA-20, `J02` = NOAA-21, `NPP` = S-NPP)
+
+#### Auto-Selection
+- **`--auto-satellite`** — Ranks candidate satellites (Himawari, GK-2A, GOES, MTG) by viewing geometry, probes **all** of them, then picks the one with the **newest available observation** at (or near) the requested timestamp.
 
 ### Products
 `sandwich`, `true`, `dvorak`, `ir` (BT PWARDS), `infrared`, `z1-ir`, `althea-ott2`, `z1-true`, `z1-dvorak`, `b03`, `irv`, `bt0`, `falsecolor`, `falsecoloradv`, `firetemp`, `dayconv`, `fire`
 
-Batch mode via `--products`.
+Batch mode via `--products`.  
+Polar-orbiting (VIIRS) composites fall back gracefully to the closest available granule time.
 
 ### Storm & Region Targeting
 - Live ATCF via KnackWx API
@@ -63,7 +88,7 @@ Batch mode via `--products`.
 - Peak-intensity time (`--peak`)
 
 ### Radar
-- **GarbinWx** composite (`--garbinradar`, requires `GARBINWX_ID`)
+- **GarbinWx** composite (`--garbinradar`, requires `GARBINWX_ID` / `GARBINWXID` / `garbinwxid`)
 - **PAGASA Panahon** national mosaic (`--phradar`)
 - Overlay on satellite or standalone floater view
 
@@ -83,6 +108,7 @@ Batch mode via `--products`.
 
 ## Quick Usage
 
+### Geostationary
 ```bash
 # Latest sandwich for all active storms
 python MonWatch-CLI.py --product sandwich --him
@@ -90,7 +116,7 @@ python MonWatch-CLI.py --product sandwich --him
 # Only Western Pacific storms
 python MonWatch-CLI.py --product sandwich --him --filter WP
 
-# Let MonWatch-CLI pick the best satellite per storm
+# Let MonWatch-CLI pick the best satellite per storm (newest observation wins)
 python MonWatch-CLI.py --auto-satellite --product sandwich
 
 # Specific storm + historical year
@@ -106,7 +132,56 @@ python MonWatch-CLI.py --phradar --floater --lat 14.5 --lon 121.0
 python MonWatch-CLI.py --storm 01W --products sandwich,ir,dvorak --export avif,mp4 --fps 15
 ```
 ---
+## Polar-Orbiting (JPSS / VIIRS) — NEW
+```
+# VIIRS SDR IR for a storm (auto picks NOAA-21 → NOAA-20 → S-NPP)
+python MonWatch-CLI.py --storm 01W --VIIRS-SDR --product infrared
 
+# Pin a specific satellite and product
+python MonWatch-CLI.py --storm 01W --jpss VIIRS-SDR \
+    --jpss-sat J02 --jpss-product VIIRS-Moderate-Resolution-Band-15-SDR \
+    --product infrared
+
+# VIIRS EDR composites
+python MonWatch-CLI.py --storm 01W --VIIRS-EDR --products falsecolor,true
+
+# Platform shortcut (implies VIIRS-SDR)
+python MonWatch-CLI.py --storm 01W --NOAA-21 --product ir
+
+# Auto JPSS satellite selection
+python MonWatch-CLI.py --storm 01W --NOAA --product sandwich
+```
+---
+# Environment Variables
+
+MonWatch-CLI reads credentials and API identifiers from environment variables. A `.env` file placed in the same directory as the script is **loaded automatically** at startup, so you can keep secrets out of your shell history.
+
+## Supported Variables
+
+| Variable | Purpose |
+|---|---|
+| `EUMETSAT_CONSUMER_KEY` | MTG / EUMETSAT API key |
+| `EUMETSAT_CONSUMER_SECRET` | MTG / EUMETSAT API secret |
+| `GARBINWXID` / `GARBINWX_ID` / `garbinwxid` | GarbinWx radar composite id |
+| `GARBINWXUSER` / `GARBINWX_USER` | Optional custom user-agent for GarbinWx |
+
+> **Note:** Any one of the aliases listed for GarbinWx is accepted. If multiple are set, `GARBINWXID` takes precedence over `GARBINWX_ID`, which takes precedence over `garbinwxid`.
+
+---
+
+## `.env` File
+
+Place a `.env` file next to `MonWatch-CLI.py` (or in the current working directory). Lines use `KEY=VALUE` format; blank lines and lines starting with `#` are ignored. Quotes around values are optional.
+
+```dotenv
+# EUMETSAT (MTG)
+EUMETSAT_CONSUMER_KEY=your-consumer-key
+EUMETSAT_CONSUMER_SECRET=your-consumer-secret
+
+# GarbinWx radar
+GARBINWX_ID=your-garbinwx-id
+GARBINWXUSER=your-garbinwx-user-agent
+```
 ---
 
 ## Acknowledgments
