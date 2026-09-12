@@ -3804,7 +3804,7 @@ def _crop_radar_to_extent(radar_rgba, radar_bounds, center_lon, crop_lon, crop_l
 
 def _sat_subpoint_lon(sat_source):
     if sat_source == "mtg":
-        return 0.0
+        return -0.3
     if sat_source in ("goes", "goes16", "goes19"):
         return -75.0
     if sat_source in ("goes17", "goes18"):
