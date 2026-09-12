@@ -983,7 +983,6 @@ def process_vpsift_ahi_data(local_files_map, target_area, target_dt, composite_t
             scn.load(["B03", "B13"])
             vis = scn["B03"].compute().astype(np.float32)
             ir = scn["B13"].compute().astype(np.float32)
-            # VIS is 500 m (22000), IR is already 2 km (5500). Stay on the IR grid.
             if vis.shape != ir.shape:
                 vis = _resize_like(vis, ir.shape)
             return vis, ir, None, None
@@ -2863,7 +2862,7 @@ def _resolve_latest_dt(sat_source, sat, segments, bands, use_target=False):
 
 def _eumetsat_creds_available():
     try:
-        import eumdac  # noqa: F401
+        import eumdac
     except ImportError:
         return False
     if os.environ.get("EUMETSAT_CONSUMER_KEY") and os.environ.get("EUMETSAT_CONSUMER_SECRET"):
@@ -2971,7 +2970,6 @@ def _auto_probe_satellite(sat_source, date_str, time_str, bands, use_target=Fals
                 now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                 probe_dt = now.replace(minute=(now.minute // 10) * 10,
                                        second=0, microsecond=0) - datetime.timedelta(minutes=20)
-            # A 10-minute window catches the nominal FCI cadence.
             hits = coll.search(dtstart=probe_dt - datetime.timedelta(minutes=5),
                                dtend=probe_dt + datetime.timedelta(minutes=5))
             if hits.first() is not None:
@@ -5252,7 +5250,20 @@ def process_storm(storm, crop_km, product, output_dir, output_width,
                    date_from=None, date_to=None, time_from=None, time_to=None,
                     use_target=False, floater=False, fps=4, nopng=False,
                     sat_source="him", fulldisk=False, track=None, info=False, radar_overlay=None,
-                    project="flat"):
+                    project="flat", jpss_product=None, jpss_sat=None):
+    _jpss_families = {"VIIRS-SDR", "VIIRS-EDR", "JPSS-GRAN", "VIIRSI-EDR",
+                      "ATMS-SDR", "ATMS-TDR", "CRIS-SDR", "OMPS-SDR", "OMPS-RDR",
+                      "JPSS-OZONE", "JPSS-NGRN", "JPSS-OCL2", "JPSS-SND"}
+    if sat_source and (sat_source.upper() in {f.upper() for f in _jpss_families}
+                       or sat_source.upper().startswith(("VIIRS", "JPSS", "ATMS", "OMPS", "CRIS"))):
+        return process_jpss_storm(
+            storm, crop_km, product, output_dir, output_width,
+            family=sat_source, jpss_product=jpss_product, jpss_sat=jpss_sat,
+            date_str=date_str, time_str=time_str,
+            download_workers=download_workers, logo_path=logo_path,
+            grid=grid, grid_thick=grid_thick, grid_color=grid_color, grid_style=grid_style,
+            no_coastlines=no_coastlines, label=label,
+            export_formats=export_formats, floater=floater, info=info, project=project)
     sat_tag = ("GK2A" if sat_source == "gk2a"
                else "GOES" if sat_source in ("goes", "goes16", "goes17", "goes18", "goes19")
                else "MTG" if sat_source == "mtg"
@@ -6362,6 +6373,19 @@ def _load_dotenv():
         return
 
 
+def _garbin_identity():
+    gid = (
+        os.environ.get("GARBINWXID")
+        or os.environ.get("GARBINWX_ID")
+        or os.environ.get("garbinwxid")
+    )
+    ua = (
+        os.environ.get("GARBINWXUSER")
+        or os.environ.get("GARBINWX_USER")
+        or GARBIN_USER_AGENT
+    )
+    return (gid.strip() if gid else None), (ua.strip() if ua else GARBIN_USER_AGENT)
+
 def _garbin_time_reference():
     url = GARBIN_TIME_REFERENCE_URL
     try:
@@ -6375,8 +6399,9 @@ def _garbin_time_reference():
 
 
 def _fetch_garbin_radar(radar_type, ts, gid, output_dir):
+    _, user_agent = _garbin_identity()
     url = f"{GARBIN_RADAR_BASE}/{radar_type}-{ts}.png"
-    headers = {"garbinwxid": gid, "user-agent": GARBIN_USER_AGENT}
+    headers = {"garbinwxid": gid, "user-agent": user_agent}
     out_path = os.path.join(output_dir, f"radar_{radar_type}_{ts}.png")
     try:
         resp = _download_session.get(url, headers=headers, stream=True, timeout=30)
@@ -6395,7 +6420,7 @@ def _fetch_garbin_radar(radar_type, ts, gid, output_dir):
 
 
 def process_garbin_radar(output_dir, radar_type="DBZ", date_str=None, time_str=None):
-    gid = os.environ.get("GARBINWX_ID") or os.environ.get("garbinwxid")
+    gid, _ua = _garbin_identity()
     if not gid:
         logging.error("--garbinradar requires a garbinwxid. Set GARBINWX_ID in a .env file "
                       "(e.g. GARBINWX_ID=YOUR-ID).")
@@ -6426,6 +6451,8 @@ def process_garbin_radar(output_dir, radar_type="DBZ", date_str=None, time_str=N
 def _garbin_radar_bytes(radar_type, date_str, time_str, gid):
     radar_type = (radar_type or "DBZ").upper()
     ts_list = []
+    if radar_type in ("RAIN", "RAINRATE"):
+        radar_type = "RR"
     if time_str:
         if date_str:
             raw = date_str + time_str
@@ -6445,7 +6472,8 @@ def _garbin_radar_bytes(radar_type, date_str, time_str, gid):
             now = now.replace(minute=(now.minute // 10) * 10, second=0, microsecond=0)
             ts_list = [now.strftime("%Y%m%d%H%M")]
 
-    headers = {"garbinwxid": gid, "user-agent": GARBIN_USER_AGENT}
+    _gid, user_agent = _garbin_identity()
+    headers = {"garbinwxid": gid, "user-agent": user_agent}
     for ts in ts_list[:18]:
         url = f"{GARBIN_RADAR_BASE}/{radar_type}-{ts}.png"
         try:
@@ -6459,7 +6487,7 @@ def _garbin_radar_bytes(radar_type, date_str, time_str, gid):
 
 
 def _garbin_radar_overlay(radar_type, date_str, time_str):
-    gid = os.environ.get("GARBINWX_ID") or os.environ.get("garbinwxid")
+    gid, _ua = _garbin_identity()
     if not gid:
         logging.error("--garbinradar overlay requires a garbinwxid. Set GARBINWX_ID in a .env file.")
         return None
@@ -6490,7 +6518,7 @@ def process_garbin_radar_viewer(storm, output_dir, output_width, radar_type="DBZ
                                 grid=False, grid_thick=0.4, grid_color="#00BFFF", grid_style="--",
                                 no_coastlines=False, label=False, export_formats=None,
                                 floater=False):
-    gid = os.environ.get("GARBINWX_ID") or os.environ.get("garbinwxid")
+    gid, _ua = _garbin_identity()
     if not gid:
         logging.error("--garbinradar requires a garbinwxid. Set GARBINWX_ID in a .env file "
                       "(e.g. GARBINWX_ID=YOUR-ID).")
@@ -7152,6 +7180,673 @@ def process_phradar_viewer(storm, output_dir, output_width, radar_type="DBZ",
     return True
 
 
+JPSS_CLASS_BASE = "https://data.class.noaa.gov/JPSS"
+
+JPSS_FAMILY_DEFAULT_PRODUCTS = {
+    "VIIRS-SDR": [
+        "VIIRS-Moderate-Resolution-Band-15-SDR",
+        "VIIRS-Imagery-Band-05-SDR",
+        "VIIRS-Imagery-Band-01-SDR",
+        "VIIRS-Moderate-Resolution-Band-05-SDR",
+        "VIIRS-Moderate-Bands-SDR-Geo",
+        "VIIRS-Day-Night-Band-SDR",
+    ],
+    "VIIRS-EDR": [
+        "VIIRS-Cloud-Mask-EDR",
+        "VIIRS-Surface-Reflectance-EDR",
+    ],
+    "JPSS-GRAN": [
+        "VIIRS-Cloud-Mask-EDR",
+        "VIIRS-Surface-Reflectance-EDR",
+        "VIIRS-Daytime-Cloud-Optical-and-Microphysical-Properties-DCOMP-EDRs",
+        "VIIRS-Aerosol-Optical-Depth-and-Aerosol-Particle-Size-EDRs",
+        "VIIRS-Volcanic-Ash-Detection-and-Height-EDR",
+    ],
+    "VIIRSI-EDR": ["VIIRS-Imagery-EDR"],
+}
+
+
+def _jpss_list_dir(url):
+    try:
+        resp = _download_session.get(url if url.endswith("/") else url + "/", timeout=60)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        logging.warning(f"JPSS list failed for {url}: {e}")
+        return []
+    entries = []
+    for m in re.finditer(r'href="(/JPSS/[^"]+/)"', html):
+        href = m.group(1)
+        name = href.rstrip("/").split("/")[-1]
+        if name and name not in (".", ".."):
+            entries.append((name + "/", "https://data.class.noaa.gov" + href))
+    for m in re.finditer(r'href="((?:/downloads)?/JPSS/[^"]+\.(?:tar|nc|h5|hdf5|xml)(?:\.gz)?)"', html, re.I):
+        href = m.group(1)
+        name = href.split("/")[-1]
+        full = "https://data.class.noaa.gov" + href
+        entries.append((name, full))
+    if not entries:
+        for m in re.finditer(r'href="([^"]+)"', html):
+            href = m.group(1)
+            if href.startswith("?") or href.startswith("#") or "javascript" in href:
+                continue
+            name = href.rstrip("/").split("/")[-1]
+            if not name or name in (".", ".."):
+                continue
+            if href.startswith("http"):
+                full = href
+            elif href.startswith("/"):
+                full = "https://data.class.noaa.gov" + href
+            else:
+                full = url.rstrip("/") + "/" + href
+            if name.endswith("/") or href.endswith("/"):
+                entries.append((name if name.endswith("/") else name + "/",
+                                full if full.endswith("/") else full + "/"))
+            else:
+                entries.append((name, full))
+    seen, out = set(), []
+    for n, u in entries:
+        if n not in seen:
+            seen.add(n)
+            out.append((n, u))
+    return out
+
+
+def jpss_list_available_dates():
+    entries = _jpss_list_dir(JPSS_CLASS_BASE + "/")
+    dates = []
+    for name, _url in entries:
+        m = re.match(r"^(\d{8})/?$", name.rstrip("/"))
+        if m:
+            dates.append(m.group(1))
+    return sorted(dates)
+
+
+def jpss_closest_date(target_date_str=None):
+    dates = jpss_list_available_dates()
+    if not dates:
+        logging.error("JPSS: no date directories found on CLASS")
+        return None
+    if not target_date_str:
+        return dates[-1]
+    target_date_str = target_date_str.strip()[:8]
+    if target_date_str in dates:
+        return target_date_str
+    try:
+        target = datetime.datetime.strptime(target_date_str, "%Y%m%d").date()
+    except ValueError:
+        logging.warning(f"JPSS: invalid date {target_date_str}; using latest {dates[-1]}")
+        return dates[-1]
+    best = min(dates, key=lambda d: abs(
+        (datetime.datetime.strptime(d, "%Y%m%d").date() - target).days))
+    if best != target_date_str:
+        logging.info(f"JPSS: requested {target_date_str} not present; closest available is {best}")
+    return best
+
+
+def jpss_list_families(date_str):
+    entries = _jpss_list_dir(f"{JPSS_CLASS_BASE}/{date_str}/")
+    out = []
+    for n, _ in entries:
+        if not n.endswith("/"):
+            continue
+        name = n.rstrip("/")
+        if re.match(r"^\d{8}$", name):
+            continue
+        out.append(name)
+    return out
+
+
+def jpss_list_products(date_str, family):
+    entries = _jpss_list_dir(f"{JPSS_CLASS_BASE}/{date_str}/{family}/")
+    return [n.rstrip("/") for n, _ in entries if n.endswith("/")]
+
+
+def jpss_list_sats(date_str, family, product):
+    entries = _jpss_list_dir(f"{JPSS_CLASS_BASE}/{date_str}/{family}/{product}/")
+    return [n.rstrip("/") for n, _ in entries if n.endswith("/")]
+
+
+def jpss_list_tars(date_str, family, product, sat_id):
+    entries = _jpss_list_dir(f"{JPSS_CLASS_BASE}/{date_str}/{family}/{product}/{sat_id}/")
+    tars = []
+    for name, url in entries:
+        if name.lower().endswith(".tar") and "manifest" not in name.lower():
+            tars.append((name, url))
+    return tars
+
+
+def _jpss_parse_granule_time_from_name(name):
+    base = os.path.basename(name)
+    m = re.search(r"_d(\d{8})_t(\d{6,7})", base)
+    if m:
+        d, t = m.group(1), m.group(2)[:6]
+        try:
+            return datetime.datetime.strptime(d + t, "%Y%m%d%H%M")
+        except ValueError:
+            pass
+    m = re.search(r"_s(\d{14})", base)
+    if m:
+        s = m.group(1)[:12]
+        try:
+            return datetime.datetime.strptime(s, "%Y%m%d%H%M")
+        except ValueError:
+            pass
+    m = re.search(r"_(\d{8})_", base)
+    if m:
+        try:
+            return datetime.datetime.strptime(m.group(1), "%Y%m%d")
+        except ValueError:
+            pass
+    return None
+
+
+def jpss_download_tar(url, local_path, retries=3):
+    thread_name = threading.current_thread().name
+    for attempt in range(1, retries + 1):
+        try:
+            logging.info(f"{thread_name}: downloading JPSS TAR {os.path.basename(local_path)} "
+                         f"(attempt {attempt}/{retries})")
+            resp = _download_session.get(url, timeout=300, stream=True)
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            sz = os.path.getsize(local_path) / (1024 * 1024)
+            logging.info(f"{thread_name}: downloaded {os.path.basename(local_path)} ({sz:.1f} MB)")
+            return True
+        except Exception as e:
+            logging.warning(f"{thread_name}: JPSS download attempt {attempt} failed: {e}")
+            if os.path.exists(local_path):
+                try:
+                    os.remove(local_path)
+                except Exception:
+                    pass
+    return False
+
+
+def jpss_extract_tar(tar_path, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    extracted = []
+    try:
+        with tarfile.open(tar_path, "r:*") as tf:
+            members = [m for m in tf.getmembers() if m.isfile()]
+            for m in members:
+                m.name = os.path.basename(m.name)
+            tf.extractall(out_dir, members=members, filter="data")
+            for m in members:
+                p = os.path.join(out_dir, m.name)
+                if os.path.exists(p):
+                    extracted.append(p)
+                    if p.endswith(".gz"):
+                        plain = p[:-3]
+                        try:
+                            with gzip.open(p, "rb") as fi, open(plain, "wb") as fo:
+                                shutil.copyfileobj(fi, fo, length=1024 * 1024)
+                            os.remove(p)
+                            extracted[-1] = plain
+                        except Exception as e:
+                            logging.warning(f"JPSS gzip decompress failed for {p}: {e}")
+    except Exception as e:
+        logging.error(f"JPSS extract failed for {tar_path}: {e}")
+        return []
+    logging.info(f"JPSS extracted {len(extracted)} file(s) from {os.path.basename(tar_path)}")
+    return extracted
+
+
+def jpss_select_closest_files(file_paths, target_dt, max_files=12):
+    scored = []
+    for p in file_paths:
+        gt = _jpss_parse_granule_time_from_name(p)
+        if gt is None:
+            score = 1e12
+        else:
+            score = -gt.timestamp() if target_dt is None else abs((gt - target_dt).total_seconds())
+        scored.append((score, gt, p))
+    scored.sort(key=lambda x: x[0])
+    selected = [p for _, _, p in scored[:max_files]]
+    if scored and scored[0][1] is not None:
+        logging.info(f"JPSS closest granule time: {scored[0][1].strftime('%Y-%m-%d %H:%M')}Z "
+                     f"(requested {target_dt.strftime('%Y-%m-%d %H:%M') + 'Z' if target_dt else 'latest'})")
+    return selected
+
+
+def jpss_resolve_product(date_str, family, preferred_product=None):
+    products = jpss_list_products(date_str, family)
+    if not products:
+        logging.warning(f"JPSS: no products under {date_str}/{family}")
+        return None
+    if preferred_product:
+        for p in products:
+            if p.lower() == preferred_product.lower() or preferred_product.lower() in p.lower():
+                return p
+        logging.warning(f"JPSS: product '{preferred_product}' not found under {family}; "
+                        f"available: {products[:12]}...")
+    defaults = JPSS_FAMILY_DEFAULT_PRODUCTS.get(family, [])
+    for d in defaults:
+        for p in products:
+            if d.lower() in p.lower() or p.lower() in d.lower():
+                return p
+    return products[0]
+
+
+def jpss_resolve_sat(date_str, family, product, preferred_sat=None):
+    sats = jpss_list_sats(date_str, family, product)
+    if not sats:
+        logging.warning(f"JPSS: no satellite dirs under {date_str}/{family}/{product}")
+        return None
+
+    alias = {
+        "NOAA-21": "J02", "NOAA21": "J02", "J02": "J02", "N21": "J02",
+        "NOAA-20": "J01", "NOAA20": "J01", "J01": "J01", "N20": "J01",
+        "NPP": "NPP", "SNPP": "NPP", "S-NPP": "NPP", "NOAA": None,
+    }
+    want = None
+    if preferred_sat:
+        key = preferred_sat.strip().upper().replace("_", "-")
+        want = alias.get(key, key)
+        if want is None:
+            preferred_sat = None
+        else:
+            for s in sats:
+                if s.upper() == want.upper():
+                    logging.info(f"JPSS: selected satellite {s} ({preferred_sat})")
+                    return s
+            logging.warning(f"JPSS: requested {preferred_sat} ({want}) not under product; "
+                            f"available {sats} — falling back to auto")
+
+    for prefer, label in (("J02", "NOAA-21"), ("J01", "NOAA-20"), ("NPP", "S-NPP"), ("npp", "S-NPP")):
+        for s in sats:
+            if s.upper() == prefer.upper():
+                logging.info(f"JPSS: auto-selected satellite {s} ({label})")
+                return s
+    logging.info(f"JPSS: using first available satellite dir {sats[0]}")
+    return sats[0]
+
+
+def discover_jpss_files(family, target_dt=None, date_str=None, time_str=None,
+                        product=None, sat_id=None, center_lat=None, center_lon=None):
+    if target_dt is None and date_str:
+        try:
+            if time_str:
+                target_dt = datetime.datetime.strptime(date_str + time_str[:4], "%Y%m%d%H%M")
+            else:
+                target_dt = datetime.datetime.strptime(date_str, "%Y%m%d")
+        except ValueError:
+            target_dt = None
+
+    seed_date = jpss_closest_date(date_str)
+    if not seed_date:
+        return None
+
+    def _match_family(families, family):
+        if family in families:
+            return family
+        m = next((f for f in families if f.upper() == family.upper()), None)
+        if m is None:
+            m = next((f for f in families if family.upper() in f.upper() or f.upper() in family.upper()), None)
+        if m and re.match(r"^\d{8}$", m):
+            return None
+        return m
+
+    all_dates = jpss_list_available_dates()
+    try:
+        target_d = datetime.datetime.strptime(seed_date, "%Y%m%d").date()
+        ordered = sorted(all_dates, key=lambda d: abs(
+            (datetime.datetime.strptime(d, "%Y%m%d").date() - target_d).days))
+    except ValueError:
+        ordered = list(reversed(all_dates))
+
+    chosen_date = matched_family = None
+    last_families = []
+    for d in ordered[:21]:
+        families = jpss_list_families(d)
+        last_families = families
+        m = _match_family(families, family)
+        if m:
+            chosen_date, matched_family = d, m
+            break
+    if not chosen_date:
+        logging.error(
+            f"JPSS family '{family}' not found on CLASS (checked {min(21, len(ordered))} day(s)). "
+            f"Latest sample: {last_families}. Try --JPSS-GRAN or --date with an older day."
+        )
+        return None
+
+    avail_date, family = chosen_date, matched_family
+    logging.info(
+        f"JPSS: using CLASS date {avail_date} / family {family}"
+        + (f" (requested {date_str})" if date_str and date_str != avail_date else "")
+        + (" [nearest day with this family]" if not date_str or date_str != avail_date else "")
+    )
+
+    prod = jpss_resolve_product(avail_date, family, product)
+    if not prod:
+        return None
+    logging.info(f"JPSS: product = {prod}")
+
+    sat = jpss_resolve_sat(avail_date, family, prod, preferred_sat=sat_id)
+    if not sat:
+        return None
+    logging.info(f"JPSS: satellite = {sat}")
+
+    tars = jpss_list_tars(avail_date, family, prod, sat)
+    if not tars:
+        logging.warning(f"JPSS: no TAR files under {avail_date}/{family}/{prod}/{sat}")
+        return None
+    logging.info(f"JPSS: found {len(tars)} TAR(s)")
+    return {
+        "date": avail_date, "family": family, "product": prod, "sat": sat,
+        "tars": tars, "target_dt": target_dt,
+    }
+
+
+def download_jpss_and_extract(meta, work_dir, download_workers=4, max_tars=2):
+    os.makedirs(work_dir, exist_ok=True)
+    tars = meta["tars"][:max_tars]
+    local_tars, tasks = [], []
+    for name, url in tars:
+        lpath = os.path.join(work_dir, name)
+        local_tars.append(lpath)
+        if not os.path.exists(lpath):
+            tasks.append((url, lpath))
+    if tasks:
+        logging.info(f"JPSS: downloading {len(tasks)} TAR(s)...")
+        with ThreadPoolExecutor(max_workers=min(download_workers, len(tasks)),
+                                thread_name_prefix="JPSS") as ex:
+            futures = [ex.submit(jpss_download_tar, u, p) for u, p in tasks]
+            for f in as_completed(futures):
+                f.result()
+    all_files = []
+    for lt in local_tars:
+        if not os.path.exists(lt):
+            continue
+        extract_dir = os.path.join(work_dir, "extract_" + os.path.basename(lt).replace(".tar", ""))
+        all_files.extend(jpss_extract_tar(lt, extract_dir))
+    if not all_files:
+        return None
+    return jpss_select_closest_files(all_files, meta.get("target_dt"), max_files=24)
+
+
+def _jpss_satpy_reader_for_files(files):
+    names = " ".join(os.path.basename(f).lower() for f in files)
+    if any(x in names for x in ("jrr-", "surfref", "lst_", "aod", "adp", "cloudmask", "cloudheight")):
+        return "viirs_edr"
+    if any(x in names for x in ("svm", "svi", "svdnb", "gimgo", "gitco", "gmodo", "gmtco", "gdnbo")):
+        return "viirs_sdr"
+    return "viirs_sdr"
+
+
+def process_jpss_data(local_files, target_area, target_dt, composite_type, resample_type="nearest"):
+    if not local_files:
+        raise ValueError("No JPSS local files")
+    reader = _jpss_satpy_reader_for_files(local_files)
+    logging.info(f"JPSS: loading {len(local_files)} file(s) with satpy reader '{reader}'")
+    try:
+        scn = Scene(filenames=local_files, reader=reader)
+    except Exception as e:
+        alt = "viirs_edr" if reader == "viirs_sdr" else "viirs_sdr"
+        logging.warning(f"JPSS: reader {reader} failed ({e}); trying {alt}")
+        scn = Scene(filenames=local_files, reader=alt)
+
+    ir_candidates = ["I05", "M15", "M16", "brightness_temperature_I5", "brightness_temperature_M15",
+                     "BT", "BrightnessTemperature", "cloud_top_temperature"]
+    vis_candidates = ["I01", "M05", "M03", "reflectance_I1", "reflectance_M5"]
+
+    def _try_load(names):
+        for n in names:
+            try:
+                scn.load([n])
+                if n in scn:
+                    return n
+            except Exception:
+                continue
+        try:
+            available = scn.available_dataset_names()
+            logging.info(f"JPSS available datasets (sample): {available[:20]}")
+            for n in names:
+                if n in available:
+                    scn.load([n])
+                    return n
+            for a in available:
+                al = a.lower()
+                if "i05" in al or "m15" in al or "brightness" in al or al.endswith("_bt"):
+                    scn.load([a])
+                    return a
+        except Exception as e:
+            logging.warning(f"JPSS available_dataset_names failed: {e}")
+        return None
+
+    if composite_type in ("infrared", "dvorak", "ir", "z1-ir", "althea-ott2", "bt0", "z1-dvorak"):
+        key = _try_load(ir_candidates)
+        if key is None:
+            raise ValueError("JPSS: could not load an IR brightness-temperature dataset")
+        data = scn[key]
+        if target_area is not None:
+            res = scn.resample(target_area, resampler=resample_type,
+                               reduce_data=True, radius_of_influence=20000)
+            data = res[key]
+        arr = np.asarray(data.compute() if hasattr(data, "compute") else data, dtype=np.float32)
+        if np.nanmax(arr) < 100:
+            arr = arr + 273.15
+        return arr, None, None, None
+
+    if composite_type in ("sandwich", "irv", "falsecolor", "falsecoloradv", "true", "b03", "z1-true"):
+        ir_key = _try_load(ir_candidates)
+        vis_key = _try_load(vis_candidates)
+        if ir_key is None and vis_key is None:
+            raise ValueError("JPSS: no VIS/IR datasets available for this composite")
+        res = scn.resample(target_area, resampler=resample_type,
+                           reduce_data=True, radius_of_influence=20000) if target_area is not None else scn
+        ir = vis = None
+        if ir_key and ir_key in res:
+            ir = np.asarray(res[ir_key].compute() if hasattr(res[ir_key], "compute") else res[ir_key], dtype=np.float32)
+            if np.nanmax(ir) < 100:
+                ir = ir + 273.15
+        if vis_key and vis_key in res:
+            vis = np.asarray(res[vis_key].compute() if hasattr(res[vis_key], "compute") else res[vis_key], dtype=np.float32)
+        if composite_type == "b03" and vis is not None:
+            return vis, None, None, None
+        if vis is not None and ir is not None:
+            if composite_type in ("falsecolor", "falsecoloradv", "sandwich", "irv"):
+                from pyorbital.astronomy import sun_zenith_angle
+                if target_area is not None:
+                    lons, lats = target_area.get_lonlats()
+                    sza = sun_zenith_angle(target_dt or datetime.datetime.utcnow(), lons, lats)
+                else:
+                    sza = np.zeros(vis.shape, dtype=np.float32)
+                r, g, b = _false_color_rgb(vis, ir, sza, advanced=(composite_type == "falsecoloradv"))
+                return r, g, b, None
+            if composite_type in ("true", "z1-true"):
+                vis_n = _normalize_reflectance(vis)
+                ir_n = np.clip((313.15 - ir) / (313.15 - 173.15), 0.0, 1.0)
+                return vis_n, vis_n, vis_n * 0.85 + ir_n * 0.15, None
+        if ir is not None:
+            return ir, None, None, None
+        if vis is not None:
+            return vis, None, None, None
+
+    key = _try_load(ir_candidates + vis_candidates)
+    if key is None:
+        raise ValueError(f"JPSS: unsupported composite {composite_type} / no datasets")
+    data = scn[key]
+    if target_area is not None:
+        res = scn.resample(target_area, resampler=resample_type,
+                           reduce_data=True, radius_of_influence=20000)
+        data = res[key]
+    arr = np.asarray(data.compute() if hasattr(data, "compute") else data, dtype=np.float32)
+    return arr, None, None, None
+
+
+def process_jpss_storm(storm, crop_km, product, output_dir, output_width,
+                       family, jpss_product=None, jpss_sat=None,
+                       date_str=None, time_str=None,
+                       download_workers=4, logo_path=None,
+                       grid=False, grid_thick=0.4, grid_color="#00BFFF", grid_style="--",
+                       no_coastlines=False, label=False,
+                       export_formats=None, floater=False, info=False, project="flat"):
+    from pyresample import create_area_def
+
+    storm_id = storm.get("atcf_id") or storm.get("storm_name", "UNKNOWN")
+    lat = storm.get("latitude")
+    lon = storm.get("longitude")
+    if lat is None or lon is None:
+        logging.warning(f"JPSS: storm {storm_id} has no lat/lon; skipping")
+        return
+
+    target_dt = None
+    if date_str:
+        tpart = (time_str or "0000")[:4]
+        try:
+            target_dt = datetime.datetime.strptime(date_str + tpart, "%Y%m%d%H%M")
+        except ValueError:
+            target_dt = None
+
+    meta = discover_jpss_files(
+        family, target_dt=target_dt, date_str=date_str, time_str=time_str,
+        product=jpss_product, sat_id=jpss_sat, center_lat=lat, center_lon=lon)
+    if not meta:
+        logging.error(f"JPSS: discovery failed for family={family}")
+        return
+
+    work_dir = tempfile.mkdtemp(prefix=f"jpss_{family}_")
+    try:
+        local_files = download_jpss_and_extract(meta, work_dir, download_workers=download_workers)
+        if not local_files:
+            logging.error("JPSS: no granules after download/extract")
+            return
+
+        half_km = (crop_km or 1000) / 2.0
+        lat_deg = half_km / 111.32
+        lon_deg = half_km / (111.32 * max(np.cos(np.radians(lat)), 0.05))
+        if all(storm.get(k) is not None for k in ("lat_min", "lat_max", "lon_min", "lon_max")):
+            extent = [storm["lon_min"], storm["lat_min"], storm["lon_max"], storm["lat_max"]]
+            width_m = abs(storm["lon_max"] - storm["lon_min"]) * 111320 * max(np.cos(np.radians(lat)), 0.05)
+            height_m = abs(storm["lat_max"] - storm["lat_min"]) * 111320
+        else:
+            extent = [lon - lon_deg, lat - lat_deg, lon + lon_deg, lat + lat_deg]
+            width_m = 2 * half_km * 1000
+            height_m = 2 * half_km * 1000
+        px = max(int(output_width or 2000), 512)
+        py = max(int(round(px * (height_m / max(width_m, 1)))), 512)
+        target_area = create_area_def(
+            "jpss_crop", {"proj": "latlong", "datum": "WGS84"},
+            area_extent=extent, shape=(py, px))
+
+        obs_dt = (meta.get("target_dt")
+                  or _jpss_parse_granule_time_from_name(local_files[0])
+                  or datetime.datetime.strptime(meta["date"], "%Y%m%d"))
+
+        composite = product
+        if composite in ("ir", "infrared", "z1-ir", "althea-ott2", "bt0", "dvorak", "z1-dvorak"):
+            ir, _, _, _ = process_jpss_data(local_files, target_area, obs_dt, "infrared")
+            ir = np.nan_to_num(ir, nan=300.0)
+            ir_c = ir - 273.15
+            if composite in ("dvorak", "z1-dvorak"):
+                cmap = mcolors.LinearSegmentedColormap.from_list("Dvorak", DVORAK_nodes)
+                display = "DVORAK (VIIRS)"
+            elif composite == "bt0":
+                cmap = mcolors.ListedColormap(_DVORAK_IR_LUT, name="dvorak_ir")
+                display = "BT0 VIIRS"
+            else:
+                cmap = mcolors.LinearSegmentedColormap.from_list("OTT", OTT_nodes)
+                display = "IR (VIIRS)"
+            vmin, vmax = -100, 50
+            plot_data, is_rgb = ir_c, False
+        else:
+            r, g, b, _ = process_jpss_data(local_files, target_area, obs_dt, composite)
+            if g is None:
+                plot_data = np.nan_to_num(r, nan=0.0)
+                if np.nanmax(plot_data) > 200:
+                    plot_data = plot_data - 273.15
+                    cmap = mcolors.LinearSegmentedColormap.from_list("OTT", OTT_nodes)
+                    vmin, vmax = -100, 50
+                else:
+                    cmap = "gray"
+                    vmin, vmax = 0, 1
+                display, is_rgb = composite.upper(), False
+            else:
+                plot_data = _stack_rgb(r, g, b)
+                cmap = vmin = vmax = None
+                display, is_rgb = composite, True
+
+        sat_tag = f"VIIRS-{meta['sat']}"
+        ts = obs_dt.strftime("%Y%m%d_%H%M")
+        out_base = os.path.join(output_dir, f"{storm_id}_{ts}_{product}_{sat_tag}")
+        metadata = {
+            "satellite_name": f"JPSS/{meta['family']}/{meta['sat']}",
+            "target_dt": obs_dt, "center_lat": lat, "center_lon": lon,
+            "crop_deg": max(lon_deg, lat_deg), "crop_lon": lon_deg, "crop_lat": lat_deg,
+            "product": display, "storm_id": storm_id, "storm_name": storm.get("storm_name", ""),
+            "winds": storm.get("winds"), "pressure": storm.get("pressure"),
+            "grid": grid, "grid_thick": grid_thick, "grid_color": grid_color, "grid_style": grid_style,
+            "no_coastlines": no_coastlines, "label": label,
+            "par": False, "tcad": False, "tcid": False, "ico": False, "invest": False,
+            "active_storms": None, "crop_km": crop_km, "polygon": storm.get("polygon"),
+            "floater": floater, "info": info, "target_extent": extent,
+        }
+        _jpss_simple_plot(plot_data, out_base, metadata, cmap=cmap, vmin=vmin, vmax=vmax,
+                          logo_path=logo_path, export_formats=export_formats or ["avif"], is_rgb=is_rgb)
+        logging.info(f"JPSS: wrote {out_base}.*")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _jpss_simple_plot(data, out_base, metadata, cmap=None, vmin=None, vmax=None,
+                      logo_path=None, export_formats=None, is_rgb=False):
+    extent = metadata.get("target_extent")
+    fig = plt.figure(figsize=(10, 10), dpi=200, facecolor="black")
+    proj = ccrs.PlateCarree()
+    ax = fig.add_axes([0, 0, 1, 1], projection=proj, facecolor="black")
+    if is_rgb:
+        ax.imshow(data, origin="upper", extent=extent, transform=proj, interpolation="nearest")
+    else:
+        ax.imshow(data, origin="upper", extent=extent, transform=proj,
+                  cmap=cmap, vmin=vmin, vmax=vmax, interpolation="nearest")
+    if not metadata.get("no_coastlines"):
+        ax.add_feature(cfeature.COASTLINE.with_scale("50m"), linewidth=0.5, edgecolor="#00FF00")
+        ax.add_feature(cfeature.BORDERS.with_scale("50m"), linewidth=0.3, edgecolor="#00FF00", alpha=0.5)
+    if extent:
+        ax.set_extent([extent[0], extent[2], extent[1], extent[3]], crs=proj)
+    ax.axis("off")
+    if metadata.get("grid") or metadata.get("label"):
+        gl = ax.gridlines(draw_labels=metadata.get("label"), linewidth=metadata.get("grid_thick", 0.4),
+                          color=metadata.get("grid_color", "#00BFFF"), alpha=0.6,
+                          linestyle=metadata.get("grid_style", "--"))
+        gl.top_labels = False
+        gl.right_labels = False
+    try:
+        add_modern_info(ax, metadata, logo_path)
+    except Exception:
+        pass
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches=None, pad_inches=0)
+    buf.seek(0)
+    plt.close(fig)
+    with Image.open(buf) as img:
+        img = img.convert("RGB")
+        for fmt in (export_formats or ["avif"]):
+            fmt = fmt.lower().strip()
+            out = f"{out_base}.{fmt}"
+            try:
+                if fmt == "avif":
+                    img.save(out, format="AVIF", quality=95, subsampling="4:4:4")
+                elif fmt == "png":
+                    img.save(out, format="PNG", compress_level=1)
+                elif fmt in ("jpg", "jpeg"):
+                    img.save(out, format="JPEG", quality=95)
+                elif fmt == "webp":
+                    img.save(out, format="WEBP", quality=95)
+                else:
+                    continue
+                logging.info(f"Saved: {out}")
+            except OSError as e:
+                alt = f"{out_base}.png"
+                logging.warning(f"Save {fmt} failed ({e}); fallback PNG")
+                img.save(alt, format="PNG", compress_level=1)
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="MonWatch-CLI — Automated satellite storm imagery")
@@ -7241,6 +7936,28 @@ def main():
                             help="Use MTSAT-1R (Himawari-6) historical data from CEReS Chiba University raw HRIT archive (2005-2014)")
     sat_group.add_argument("--mtsat2", action="store_true",
                             help="Use MTSAT-2 (Himawari-7) historical data from CEReS Chiba University raw HRIT archive (2007-2015); alias for --mtsat")
+    sat_group.add_argument("--VIIRS-SDR", dest="viirs_sdr", action="store_true",
+                            help="Use JPSS VIIRS Sensor Data Records from NOAA CLASS (polar-orbiting)")
+    sat_group.add_argument("--VIIRS-EDR", dest="viirs_edr", action="store_true",
+                            help="Use JPSS VIIRS Environmental Data Records from NOAA CLASS")
+    sat_group.add_argument("--JPSS-GRAN", dest="jpss_gran", action="store_true",
+                            help="Use JPSS-GRAN family (VIIRS granule EDRs) from NOAA CLASS")
+    sat_group.add_argument("--VIIRSI-EDR", dest="viirsi_edr", action="store_true",
+                            help="Use VIIRSI-EDR family from NOAA CLASS")
+    parser.add_argument("--jpss", type=str, default=None,
+                        help="JPSS CLASS family name (e.g. VIIRS-SDR, VIIRS-EDR, JPSS-GRAN)")
+    parser.add_argument("--jpss-product", type=str, default=None,
+                        help="Optional CLASS product subfolder under the JPSS family")
+    parser.add_argument("--jpss-sat", type=str, default=None,
+                        help="Optional JPSS satellite id (J01=NOAA-20, J02=NOAA-21, NPP)")
+    parser.add_argument("--NOAA-20", dest="noaa20", action="store_true",
+                        help="Use NOAA-20 (J01) for JPSS/VIIRS")
+    parser.add_argument("--NOAA-21", dest="noaa21", action="store_true",
+                        help="Use NOAA-21 (J02) for JPSS/VIIRS")
+    parser.add_argument("--NOAA", dest="noaa_auto", action="store_true",
+                        help="Auto-select JPSS satellite (prefer NOAA-21/J02, then NOAA-20/J01, then NPP)")
+    parser.add_argument("--NPP", dest="npp_sat", action="store_true",
+                        help="Use S-NPP for JPSS/VIIRS")
     parser.add_argument("--multi", action="store_true",
                         help="Process with BOTH Himawari and GK-2A; equivalent to running --him then --gk2a with the same parameters. Output filenames get a _HIM9 or _GK2A suffix")
     parser.add_argument("--global", dest="global_mode", action="store_true",
@@ -7351,8 +8068,38 @@ def main():
         sat_source = "him8"
     elif args.him:
         sat_source = "him"
+    elif getattr(args, "viirs_sdr", False):
+        sat_source = "VIIRS-SDR"
+    elif getattr(args, "viirs_edr", False):
+        sat_source = "VIIRS-EDR"
+    elif getattr(args, "jpss_gran", False):
+        sat_source = "JPSS-GRAN"
+    elif getattr(args, "viirsi_edr", False):
+        sat_source = "VIIRSI-EDR"
+    elif getattr(args, "jpss", None):
+        sat_source = args.jpss.strip()
     else:
         sat_source = None
+
+    if getattr(args, "noaa21", False):
+        args.jpss_sat = "J02"
+    elif getattr(args, "noaa20", False):
+        args.jpss_sat = "J01"
+    elif getattr(args, "npp_sat", False):
+        args.jpss_sat = "NPP"
+    elif getattr(args, "noaa_auto", False):
+        if not getattr(args, "jpss_sat", None):
+            args.jpss_sat = None
+        logging.info("JPSS: --NOAA auto (prefer NOAA-21/J02, then NOAA-20/J01, then NPP)")
+
+    _jpss_platform = any([
+        getattr(args, "noaa20", False), getattr(args, "noaa21", False),
+        getattr(args, "noaa_auto", False), getattr(args, "npp_sat", False),
+        bool(getattr(args, "jpss_sat", None)),
+    ])
+    if _jpss_platform and sat_source is None:
+        sat_source = "VIIRS-SDR"
+        logging.info("JPSS: no family flag given; defaulting to VIIRS-SDR")
 
     multi = bool(getattr(args, "multi", False))
     _any_goes = any([args.goes, getattr(args, "goes16", False), getattr(args, "goes17", False),
@@ -7441,7 +8188,10 @@ def main():
     _sat_flag_given = any([args.him, args.him9, args.him8, args.gk2a, args.goes,
                        getattr(args, "goes16", False), getattr(args, "goes17", False),
                        args.goes18, args.goes19, args.mtg, args.mtsat,
-                       args.mtsat1, args.mtsat2])
+                       args.mtsat1, args.mtsat2,
+                       getattr(args, "viirs_sdr", False), getattr(args, "viirs_edr", False),
+                       getattr(args, "jpss_gran", False), getattr(args, "viirsi_edr", False),
+                       bool(getattr(args, "jpss", None))])
     radar_overlay = None
     if _sat_flag_given:
         if args.garbinradar:
@@ -7588,7 +8338,7 @@ def main():
                                   date_from=args.datefrom, date_to=args.dateto, time_from=args.timefrom, time_to=args.timeto,
                                   use_target=_sat_use_target(sat), floater=args.floater, fps=args.fps, nopng=args.nopng,
                                   track=ibtracs_track, sat_source=sat, fulldisk=args.fulldisk, info=args.info, radar_overlay=radar_overlay,
-                                        project=args.project)
+                                        project=args.project, jpss_product=getattr(args, 'jpss_product', None), jpss_sat=getattr(args, 'jpss_sat', None))
             except Exception as e:
                 logging.error(f"Failed to process custom point ({sat}): {e}")
                 if args.verbose:
@@ -7919,18 +8669,22 @@ def main():
                          f"({s_lat:.2f}, {s_lon:.2f}) -> "
                          + ", ".join(n for _, n in cands))
 
-            picked_src, picked_name = None, None
+            picked_src, picked_name, picked_dt = None, None, None
             for cand_src, cand_name in cands:
                 logging.info(f"    Probing {cand_name} ({cand_src})...")
                 pdt, _bucket = _auto_probe_satellite(
                     cand_src, args.date, args.time, auto_probe_bands,
                     use_target=False)
-                if pdt is not None:
-                    picked_src, picked_name = cand_src, cand_name
-                    logging.info(f"    [OK] {cand_name} has data at "
-                                 f"{pdt.strftime('%Y-%m-%d %H:%M')}Z")
-                    break
-                logging.info(f"    [--] {cand_name} unavailable")
+                if pdt is None:
+                    logging.info(f"    [--] {cand_name} unavailable")
+                    continue
+                logging.info(f"    [OK] {cand_name} has data at "
+                             f"{pdt.strftime('%Y-%m-%d %H:%M')}Z")
+                if picked_dt is None or pdt > picked_dt:
+                    picked_src, picked_name, picked_dt = cand_src, cand_name, pdt
+            if picked_dt is not None:
+                logging.info(f"    Picked newest: {picked_name} "
+                             f"({picked_dt.strftime('%Y-%m-%d %H:%M')}Z)")
             if picked_src is None:
                 logging.warning(f"  [auto-satellite] no candidate had data for "
                                 f"{storm.get('atcf_id')}; skipping.")
@@ -7969,7 +8723,7 @@ def main():
                                   date_from=args.datefrom, date_to=args.dateto, time_from=args.timefrom, time_to=args.timeto,
                                   use_target=_sat_use_target(sat), floater=args.floater, fps=args.fps, nopng=args.nopng,
                                   track=ibtracs_track, sat_source=sat, fulldisk=args.fulldisk, info=args.info, radar_overlay=radar_overlay,
-                                        project=args.project)
+                                        project=args.project, jpss_product=getattr(args, 'jpss_product', None), jpss_sat=getattr(args, 'jpss_sat', None))
             except Exception as e:
                 logging.error(f"Failed to process storm {storm.get('atcf_id')} ({sat}): {e}")
                 if args.verbose:
